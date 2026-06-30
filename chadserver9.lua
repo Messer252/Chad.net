@@ -4,6 +4,8 @@ local modem = peripheral.find("modem")
 if not modem then error("No modem found") end
 rednet.open(peripheral.getName(modem))
 
+print("Chad.Net Server V9 Online")
+
 -------------------------------------------------
 -- STATE
 -------------------------------------------------
@@ -30,74 +32,77 @@ end
 -------------------------------------------------
 while true do
     local id, msg = rednet.receive(PROTOCOL)
-    if type(msg) ~= "table" then goto continue end
 
-    -------------------------------------------------
-    -- LOGIN (NO PASSWORD SYSTEM)
-    -------------------------------------------------
-    if msg.type == "login" then
-        clients[id] = {name = msg.user, lastSeen = os.clock()}
-        send(id, {type="login_ok"})
-        broadcast({type="system", text=msg.user.." joined"})
-    end
+    if type(msg) == "table" then
 
-    -------------------------------------------------
-    -- PING
-    -------------------------------------------------
-    if msg.type == "ping" and clients[id] then
-        clients[id].lastSeen = os.clock()
-        send(id, {type="pong"})
-    end
+        -------------------------------------------------
+        -- LOGIN (V9 SAFE)
+        -------------------------------------------------
+        if msg.type == "login" then
+            clients[id] = {name = msg.user, lastSeen = os.clock()}
 
-    -------------------------------------------------
-    -- CHAT
-    -------------------------------------------------
-    if msg.type == "chat" then
-        local u = clients[id]
-        if u then
-            broadcast({type="chat", text="["..u.name.."]: "..msg.text})
+            send(id, {type="login_ok"})
+            broadcast({type="system", text=msg.user.." joined"})
         end
-    end
 
-    -------------------------------------------------
-    -- USER LIST
-    -------------------------------------------------
-    if msg.type == "user_list" then
-        send(id, {type="user_list", users=getUsers()})
-    end
+        -------------------------------------------------
+        -- PING
+        -------------------------------------------------
+        if msg.type == "ping" and clients[id] then
+            clients[id].lastSeen = os.clock()
+            send(id, {type="pong"})
+        end
 
-    -------------------------------------------------
-    -- TTT INVITE (FIXED)
-    -------------------------------------------------
-    if msg.type == "ttt_challenge" then
-        local from = clients[id] and clients[id].name
-        local target = msg.target
+        -------------------------------------------------
+        -- CHAT
+        -------------------------------------------------
+        if msg.type == "chat" and clients[id] then
+            broadcast({
+                type="chat",
+                text="["..clients[id].name.."]: "..msg.text
+            })
+        end
 
-        local targetId
-        for cid, v in pairs(clients) do
-            if v.name == target then
-                targetId = cid
-                break
+        -------------------------------------------------
+        -- USERS
+        -------------------------------------------------
+        if msg.type == "user_list" then
+            send(id, {type="user_list", users=getUsers()})
+        end
+
+        -------------------------------------------------
+        -- TTT INVITE FIXED
+        -------------------------------------------------
+        if msg.type == "ttt_challenge" then
+            local from = clients[id] and clients[id].name
+            if not from then goto continue end
+
+            local targetId
+            for cid, v in pairs(clients) do
+                if v.name == msg.target then
+                    targetId = cid
+                    break
+                end
+            end
+
+            if targetId then
+                send(targetId, {
+                    type="ttt_invite",
+                    from=from
+                })
+            else
+                send(id, {type="system", text="User not found"})
             end
         end
 
-        if targetId then
-            send(targetId, {
-                type="ttt_invite",
-                from=from
-            })
-        else
-            send(id, {type="system", text="User not found"})
-        end
-    end
-
-    -------------------------------------------------
-    -- CLEANUP
-    -------------------------------------------------
-    for cid, v in pairs(clients) do
-        if os.clock() - v.lastSeen > 12 then
-            broadcast({type="system", text=v.name.." disconnected"})
-            clients[cid] = nil
+        -------------------------------------------------
+        -- CLEANUP
+        -------------------------------------------------
+        for cid, v in pairs(clients) do
+            if os.clock() - v.lastSeen > 12 then
+                broadcast({type="system", text=v.name.." disconnected"})
+                clients[cid] = nil
+            end
         end
     end
 
