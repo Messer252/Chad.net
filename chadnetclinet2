@@ -1,0 +1,190 @@
+-- =====================================
+-- Chad.Net v6.1 CLIENT (SMOOTH UI FIX)
+-- =====================================
+
+local PROTOCOL = "chadnet"
+
+for _, side in ipairs({"left","right","top","bottom","front","back"}) do
+    if peripheral.isPresent(side) and peripheral.getType(side) == "modem" then
+        rednet.open(side)
+        break
+    end
+end
+
+-------------------------------------------------
+-- STATE
+-------------------------------------------------
+local user
+local chat = {}
+local input = ""
+local status = "CONNECTING..."
+
+local screen = "chat" -- chat | help | users
+
+-------------------------------------------------
+local function send(msg)
+    rednet.broadcast(msg, PROTOCOL)
+end
+
+-------------------------------------------------
+-- LOGIN
+-------------------------------------------------
+term.clear()
+term.setCursorPos(1,1)
+
+print("Chad.Net v6.1")
+write("Username: ")
+user = read()
+
+send({type="login", user=user})
+
+-------------------------------------------------
+-- HELP TEXT
+-------------------------------------------------
+local helpText = {
+"Chad.Net Controls:",
+"",
+"Type normally = chat",
+"/help = this screen",
+"/users = online list",
+"/dm name msg = message",
+"/bot id = check bot",
+"",
+"ESC switches back to chat"
+}
+
+-------------------------------------------------
+-- DRAW SCREEN
+-------------------------------------------------
+local function draw()
+    term.clear()
+    term.setCursorPos(1,1)
+
+    print("Chad.Net | "..user.." | "..status)
+    print("--------------------------------")
+
+    if screen == "chat" then
+
+        for i = math.max(1,#chat-12), #chat do
+            print(chat[i])
+        end
+
+        print("--------------------------------")
+        write("> "..input)
+
+    elseif screen == "help" then
+
+        for _, line in ipairs(helpText) do
+            print(line)
+        end
+
+    elseif screen == "users" then
+        print("Requesting users...")
+    end
+
+    -- bottom status bar
+    local w,h = term.getSize()
+    term.setCursorPos(1,h)
+    term.clearLine()
+    term.write("[Chat] [Help] [Users]   Status: "..status)
+end
+
+-------------------------------------------------
+-- RECEIVE LOOP (REALTIME FIX)
+-------------------------------------------------
+local function recv()
+    while true do
+        local _, msg = rednet.receive(PROTOCOL)
+
+        if msg.type == "chat" then
+            table.insert(chat, msg.text)
+
+        elseif msg.type == "dm" then
+            table.insert(chat, "(DM) "..msg.from..": "..msg.text)
+
+        elseif msg.type == "system" then
+            table.insert(chat, msg.text)
+
+        elseif msg.type == "bot_info" then
+            table.insert(chat, textutils.serialize(msg.data))
+
+        elseif msg.type == "user_list" then
+            table.insert(chat, "Online: "..table.concat(msg.users, ", "))
+
+        elseif msg.type == "login_ok" then
+            status = "ONLINE 🟢"
+
+        elseif msg.type == "pong" then
+            status = "ONLINE 🟢"
+        end
+
+        draw()
+    end
+end
+
+-------------------------------------------------
+-- INPUT LOOP (FIXED RESPONSIVENESS)
+-------------------------------------------------
+local function inputLoop()
+    draw()
+
+    while true do
+        local e, a = os.pullEvent()
+
+        if e == "char" then
+            input = input .. a
+
+        elseif e == "key" then
+
+            if a == keys.backspace then
+                input = input:sub(1,-2)
+
+            elseif a == keys.enter then
+
+                -------------------------------------------------
+                -- HELP COMMAND (UX FIX)
+                -------------------------------------------------
+                if input == "/help" then
+                    screen = "help"
+
+                elseif input == "/chat" then
+                    screen = "chat"
+
+                elseif input == "/users" then
+                    send({type="user_list"})
+                    screen = "chat"
+
+                elseif input:sub(1,4) == "/dm " then
+                    local _,_,to,msg = input:find("/dm (%S+) (.+)")
+                    send({type="dm", to=to, text=msg})
+
+                elseif input:sub(1,5) == "/bot " then
+                    local id = tonumber(input:sub(6))
+                    send({type="bot_query", id=id})
+
+                else
+                    send({type="chat", text=input})
+                end
+
+                input = ""
+            end
+        end
+
+        draw()
+    end
+end
+
+-------------------------------------------------
+-- HEARTBEAT (FIX STATUS)
+-------------------------------------------------
+local function ping()
+    while true do
+        send({type="ping"})
+        sleep(2)
+    end
+end
+
+-------------------------------------------------
+-- START
+-------------------------------------------------
+parallel.waitForAny(recv, inputLoop, ping)
