@@ -1,14 +1,14 @@
 local PROTOCOL = "chadnet"
 
 -------------------------------------------------
--- MODEM
+-- MODEM SAFE OPEN
 -------------------------------------------------
 local modem = peripheral.find("modem")
 if not modem then error("No modem found") end
 rednet.open(peripheral.getName(modem))
 
 -------------------------------------------------
--- OPTIONAL MONITOR MIRROR
+-- OPTIONAL MONITOR
 -------------------------------------------------
 local mon = peripheral.find("monitor")
 local speaker = peripheral.find("speaker")
@@ -21,25 +21,27 @@ local function out()
     return mon or term
 end
 
-local function ding()
-    if speaker then speaker.playNote("bell", 1, 12) end
-end
-
 -------------------------------------------------
 -- STATE
 -------------------------------------------------
 local user = ""
 local chat = {}
 local input = ""
-local screen = "chat"
 local online = {}
 local popup = nil
+local status = "BOOTING..."
 
 -------------------------------------------------
+local function ding()
+    if speaker then speaker.playNote("bell", 1, 12) end
+end
+
 local function notify(text)
     popup = {text=text, t=os.clock()+3}
 end
 
+-------------------------------------------------
+-- SAFE DRAW (NEVER BLOCKS NETWORK)
 -------------------------------------------------
 local function draw()
     local t = out()
@@ -49,19 +51,17 @@ local function draw()
     local w,h = t.getSize()
     local right = math.floor(w*0.7)
 
-    print("Chad.Net | "..user.." | ONLINE")
+    print("Chad.Net V9 | " .. status)
     print("--------------------------------")
 
-    if screen == "chat" then
-        for i = math.max(1,#chat-10), #chat do
-            print(chat[i])
-        end
+    for i = math.max(1,#chat-10), #chat do
+        print(chat[i])
     end
 
     print("--------------------------------")
-    write("> "..input)
+    write("> " .. input)
 
-    -- USER LIST (RIGHT SIDE)
+    -- USER LIST
     t.setCursorPos(right,2)
     print("ONLINE")
     for i,v in ipairs(online) do
@@ -78,46 +78,51 @@ local function draw()
 
     t.setCursorPos(1,h)
     t.clearLine()
-    t.write("READY")
+    t.write(status)
 end
 
 -------------------------------------------------
--- RECEIVE
+-- NETWORK LOOP (ISOLATED)
 -------------------------------------------------
-local function recv()
+local function network()
     while true do
-        local _,msg = rednet.receive(PROTOCOL)
+        local id,msg = rednet.receive(PROTOCOL)
 
-        if msg.type == "login_ok" then
-            notify("Connected")
-            ding()
+        if type(msg) == "table" then
 
-        elseif msg.type == "chat" then
-            table.insert(chat,msg.text)
-            ding()
+            if msg.type == "login_ok" then
+                status = "ONLINE"
+                notify("Connected")
+                ding()
 
-        elseif msg.type == "system" then
-            notify(msg.text)
-            ding()
+            elseif msg.type == "chat" then
+                table.insert(chat,msg.text)
+                ding()
 
-        elseif msg.type == "user_list" then
-            online = msg.users
+            elseif msg.type == "system" then
+                notify(msg.text)
+                ding()
 
-        elseif msg.type == "ttt_invite" then
-            notify("TTT invite from "..msg.from)
-            ding()
+            elseif msg.type == "user_list" then
+                online = msg.users
+
+            elseif msg.type == "ttt_invite" then
+                notify("TTT from "..msg.from)
+                ding()
+
+            elseif msg.type == "pong" then
+                status = "ONLINE"
+            end
+
+            draw()
         end
-
-        draw()
     end
 end
 
 -------------------------------------------------
--- INPUT
+-- INPUT LOOP (ALWAYS RESPONSIVE)
 -------------------------------------------------
 local function inputLoop()
-    draw()
-
     while true do
         local e,a = os.pullEvent()
 
@@ -128,17 +133,23 @@ local function inputLoop()
             local msg = input
             input = ""
 
-            if msg == "/users" then
-                rednet.broadcast({type="user_list"}, PROTOCOL)
-
-            elseif msg:sub(1,5) == "/ttt " then
+            if msg:sub(1,5) == "/ttt " then
                 rednet.broadcast({
                     type="ttt_challenge",
                     target=msg:sub(6)
                 }, PROTOCOL)
 
+            elseif msg == "/users" then
+                rednet.broadcast({type="user_list"}, PROTOCOL)
+
+            elseif msg == "/login" then
+                notify("No login needed in V9")
+
             else
-                rednet.broadcast({type="chat", text=msg}, PROTOCOL)
+                rednet.broadcast({
+                    type="chat",
+                    text=msg
+                }, PROTOCOL)
             end
 
             draw()
@@ -156,4 +167,12 @@ local function ping()
     end
 end
 
-parallel.waitForAny(recv, inputLoop, ping)
+-------------------------------------------------
+-- BOOT SEQUENCE (IMPORTANT FIX)
+-------------------------------------------------
+status = "CONNECTING..."
+draw()
+
+rednet.broadcast({type="ping"}, PROTOCOL)
+
+parallel.waitForAny(network, inputLoop, ping)
