@@ -1,0 +1,208 @@
+--    =====================================
+-- Chad.Net v6 SERVER (UI BACKEND)
+-- =====================================
+
+local PROTOCOL = "chadnet"
+
+for _, side in ipairs({"left","right","top","bottom","front","back"}) do
+    if peripheral.isPresent(side) and peripheral.getType(side) == "modem" then
+        rednet.open(side)
+        break
+    end
+end
+
+-------------------------------------------------
+-- STATE
+-------------------------------------------------
+local users = {}
+local sessions = {}   -- id -> username
+local clients = {}    -- id -> username
+local lastSeen = {}
+
+local bots = {}
+local ttt = {}
+
+-------------------------------------------------
+local function send(id, msg)
+    rednet.send(id, msg, PROTOCOL)
+end
+
+local function broadcast(msg)
+    rednet.broadcast(msg, PROTOCOL)
+end
+
+-------------------------------------------------
+-- HELPERS
+-------------------------------------------------
+local function getUserList()
+    local list = {}
+    for _, name in pairs(sessions) do
+        table.insert(list, name)
+    end
+    return list
+end
+
+-------------------------------------------------
+-- TIC TAC TOE
+-------------------------------------------------
+local wins = {
+    {1,2,3},{4,5,6},{7,8,9},
+    {1,4,7},{2,5,8},{3,6,9},
+    {1,5,9},{3,5,7}
+}
+
+local function checkWin(b, s)
+    for _, w in ipairs(wins) do
+        if b[w[1]]==s and b[w[2]]==s and b[w[3]]==s then
+            return true
+        end
+    end
+    return false
+end
+
+-------------------------------------------------
+-- SERVER LOOP
+-------------------------------------------------
+while true do
+    local id, msg = rednet.receive(PROTOCOL)
+    if type(msg) ~= "table" then goto continue end
+
+    -------------------------------------------------
+    -- PING
+    -------------------------------------------------
+    if msg.type == "ping" then
+        lastSeen[id] = os.clock()
+        send(id, {type="pong"})
+    end
+
+    -------------------------------------------------
+    -- LOGIN (NO PASSWORD)
+    -------------------------------------------------
+    if msg.type == "login" then
+        local name = msg.user
+        if not name or name == "" then goto continue end
+
+        users[name] = true
+        sessions[id] = name
+        clients[id] = name
+        lastSeen[id] = os.clock()
+
+        send(id, {type="login_ok", user=name})
+        broadcast({type="system", text=name.." joined Chad.Net"})
+    end
+
+    -------------------------------------------------
+    -- CHAT (UI MODE)
+    -------------------------------------------------
+    if msg.type == "chat" then
+        local u = sessions[id]
+        if not u then goto continue end
+
+        broadcast({type="chat", text="["..u.."]: "..msg.text})
+    end
+
+    -------------------------------------------------
+    -- DM (UI MODE)
+    -------------------------------------------------
+    if msg.type == "dm" then
+        local from = sessions[id]
+        if not from then goto continue end
+
+        for cid, uname in pairs(sessions) do
+            if uname == from or uname == msg.to then
+                send(cid, {
+                    type="dm",
+                    from=from,
+                    to=msg.to,
+                    text=msg.text
+                })
+            end
+        end
+    end
+
+    -------------------------------------------------
+    -- BOT STATUS
+    -------------------------------------------------
+    if msg.type == "bot_status" then
+        bots[msg.id] = msg.data
+    end
+
+    if msg.type == "bot_query" then
+        send(id, {
+            type="bot_info",
+            id=msg.id,
+            data=bots[msg.id]
+        })
+    end
+
+    -------------------------------------------------
+    -- USER LIST REQUEST
+    -------------------------------------------------
+    if msg.type == "user_list" then
+        send(id, {
+            type="user_list",
+            users=getUserList()
+        })
+    end
+
+    -------------------------------------------------
+    -- TIC TAC TOE
+    -------------------------------------------------
+    if msg.type == "ttt_challenge" then
+        local p1 = sessions[id]
+        local p2 = msg.target
+
+        if not p1 or not p2 then goto continue end
+
+        ttt[p2] = {
+            p1=p1,
+            p2=p2,
+            board={" "," "," "," "," "," "," "," "," "},
+            turn=p1,
+            active=true
+        }
+
+        broadcast({type="system", text=p1.." challenged "..p2})
+    end
+
+    if msg.type == "ttt_move" then
+        local player = sessions[id]
+        local game = ttt[player]
+
+        if not game or not game.active then goto continue end
+        if game.turn ~= player then goto continue end
+
+        local pos = msg.pos
+        if not pos or game.board[pos] ~= " " then goto continue end
+
+        local sym = (player == game.p1) and "X" or "O"
+        game.board[pos] = sym
+
+        if checkWin(game.board, sym) then
+            broadcast({type="ttt_result", text=player.." wins!"})
+            game.active = false
+            goto continue
+        end
+
+        game.turn = (game.turn == game.p1) and game.p2 or game.p1
+
+        send(id, {
+            type="ttt_state",
+            board=game.board,
+            turn=game.turn
+        })
+    end
+
+    -------------------------------------------------
+    -- CLEANUP
+    -------------------------------------------------
+    for cid, t in pairs(lastSeen) do
+        if os.clock() - t > 15 then
+            lastSeen[cid] = nil
+            sessions[cid] = nil
+            clients[cid] = nil
+        end
+    end
+
+    ::continue::
+end
